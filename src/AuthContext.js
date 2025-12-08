@@ -1,23 +1,49 @@
-// AuthContext.js - исправленная версия
+
 import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
-import { Auth as AuthService } from './auth';
+import { 
+  registerUser, 
+  loginUser, 
+  logoutUser, 
+  getCurrentUser, 
+  updateUserProfile,
+  updateUserAvatar 
+} from './firebase';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState(() => AuthService.getCurrentUser());
-  const [isAuthenticated, setIsAuthenticated] = useState(() => !!AuthService.getCurrentUser());
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  const updateAuthState = useCallback((user) => {
-    setCurrentUser(user);
-    setIsAuthenticated(!!user);
+  // Загружаем текущего пользователя при монтировании
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        setLoading(true);
+        const user = await getCurrentUser();
+        if (user) {
+          setCurrentUser(user);
+          setIsAuthenticated(true);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки пользователя:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUser();
   }, []);
 
-  const login = useCallback(async (username, password) => {
+  const login = useCallback(async (email, password) => {
+    setLoading(true);
     try {
-      const result = await AuthService.login(username, password);
+      const result = await loginUser(email, password);
       if (result.success) {
-        updateAuthState(result.user);
+        setCurrentUser(result.user);
+        setIsAuthenticated(true);
+        localStorage.setItem('firebase_user', JSON.stringify(result.user));
         return { success: true, user: result.user };
       } else {
         return { success: false, error: result.message || 'Ошибка входа' };
@@ -25,74 +51,101 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('Login error:', error);
       return { success: false, error: error.message || 'Произошла ошибка при входе' };
+    } finally {
+      setLoading(false);
     }
-  }, [updateAuthState]);
+  }, []);
 
   const register = useCallback(async (userData) => {
+    setLoading(true);
     try {
-      const result = await AuthService.register(userData);
+      const result = await registerUser(userData);
       if (result.success) {
-        // Автоматически логиним после успешной регистрации
-        const loginResult = await AuthService.login(userData.username, userData.password);
-        if (loginResult.success) {
-          updateAuthState(loginResult.user);
-          return { success: true, user: loginResult.user };
-        } else {
-          return { 
-            success: false, 
-            error: loginResult.message || 'Регистрация успешна, но не удалось войти автоматически' 
-          };
-        }
+        setCurrentUser(result.user);
+        setIsAuthenticated(true);
+        localStorage.setItem('firebase_user', JSON.stringify(result.user));
+        return { success: true, user: result.user };
       } else {
         return { success: false, error: result.message || 'Ошибка регистрации' };
       }
     } catch (error) {
       console.error('Register error:', error);
       return { success: false, error: error.message || 'Произошла ошибка при регистрации' };
+    } finally {
+      setLoading(false);
     }
-  }, [updateAuthState]);
-
-  const logout = useCallback(() => {
-    AuthService.logout();
-    updateAuthState(null);
-  }, [updateAuthState]);
-
-  const updateUser = useCallback((updatedUser) => {
-    setCurrentUser(updatedUser);
-    AuthService.updateCurrentUser(updatedUser);
   }, []);
 
-  useEffect(() => {
-    const handleStorageChange = () => {
-      const user = AuthService.getCurrentUser();
-      updateAuthState(user);
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [updateAuthState]);
-
-  useEffect(() => {
-    if (currentUser) {
-      AuthService.updateCurrentUser(currentUser);
+  const logout = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await logoutUser();
+      if (result.success) {
+        setCurrentUser(null);
+        setIsAuthenticated(false);
+        localStorage.removeItem('firebase_user');
+        return { success: true };
+      }
+      return { success: false, error: result.message };
+    } catch (error) {
+      console.error('Logout error:', error);
+      return { success: false, error: error.message };
+    } finally {
+      setLoading(false);
     }
-  }, [currentUser]);
+  }, []);
+
+  const updateUser = useCallback(async (userId, updates) => {
+    try {
+      const result = await updateUserProfile(userId, updates);
+      if (result.success) {
+        setCurrentUser(prev => ({
+          ...prev,
+          ...updates,
+          id: userId
+        }));
+        return { success: true };
+      }
+      return { success: false, error: result.message };
+    } catch (error) {
+      console.error('Update user error:', error);
+      return { success: false, error: error.message };
+    }
+  }, []);
+
+  const changeAvatar = useCallback(async (userId, avatarUrl) => {
+    try {
+      const result = await updateUserAvatar(userId, avatarUrl);
+      if (result.success) {
+        setCurrentUser(prev => ({
+          ...prev,
+          avatar: avatarUrl
+        }));
+        return { success: true, avatar: avatarUrl };
+      }
+      return { success: false, error: result.message };
+    } catch (error) {
+      console.error('Change avatar error:', error);
+      return { success: false, error: error.message };
+    }
+  }, []);
 
   const value = {
     currentUser,
     user: currentUser,
+    loading,
     isAuthenticated,
     isLoggedIn: isAuthenticated,
     isAdmin: currentUser?.isAdmin || false,
     
+    // Auth functions
     login,
     register,
     logout,
     updateUser,
+    changeAvatar,
     
+    // Aliases for compatibility
     loginUser: login,
     signIn: login,
     signOut: logout,
@@ -100,12 +153,17 @@ export const AuthProvider = ({ children }) => {
     updateCurrentUser: updateUser,
     setUser: updateUser,
     
+    // User type checks
     isUser: !currentUser?.isAdmin,
     isRegularUser: !currentUser?.isAdmin,
     isAdministrator: currentUser?.isAdmin || false,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
 export const useAuth = () => {
