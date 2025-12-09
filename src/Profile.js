@@ -1,13 +1,17 @@
-// Profile.js - полностью исправленный компонент с сетевой историей
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Storage } from './storage';
-import { NetworkGameManager } from './NetworkGameManager';
+import { 
+  updateUserProfile, 
+  updateUserAvatar,
+  getUserGames,
+  getCurrentUser
+} from './firebase';
 
 function Profile() {
   const navigate = useNavigate();
-  const { currentUser, user, updateUser } = useAuth();
+  const { currentUser, user, updateUser, changeAvatar } = useAuth();
   
   // Используем активного пользователя
   const activeUser = user || currentUser;
@@ -25,7 +29,8 @@ function Profile() {
       wins: 0,
       losses: 0,
       draws: 0,
-      score: 0
+      score: 0,
+      winRate: 0
     },
     recentGames: []
   });
@@ -57,62 +62,33 @@ function Profile() {
         username: activeUser.username || 'Пользователь'
       };
 
-      // Пытаемся загрузить статистику из localStorage
-      let stats = {
+      // Получаем статистику пользователя
+      const stats = activeUser.stats || {
         gamesPlayed: 0,
         wins: 0,
         losses: 0,
         draws: 0,
-        score: 0
+        score: 0,
+        winRate: 0
       };
       
+      // Получаем игры пользователя из Firebase
       let recentGames = [];
-
       try {
-        // Получаем сохраненную статистику
-        const savedStats = Storage.getUserStats(activeUser.username);
-        stats = {
-          gamesPlayed: savedStats.gamesPlayed || 0,
-          wins: savedStats.wins || 0,
-          losses: savedStats.losses || 0,
-          draws: savedStats.draws || 0,
-          score: savedStats.score || 0
-        };
-        
-        // Получаем обычные игры (против ИИ)
-        const savedGames = Storage.getUserGames(activeUser.username);
-        const aiGames = savedGames.map(game => ({
-          id: game.id,
-          timestamp: game.timestamp,
-          win: game.win,
-          score: game.score || 0,
-          aiLevel: game.aiLevel || 'medium',
-          opponent: 'ИИ',
-          type: 'ai'
-        }));
-        
-        // Получаем сетевые игры
-        const networkGames = NetworkGameManager.getNetworkHistory(activeUser.username)
-          .map(game => ({
+        const gamesResult = await getUserGames(activeUser.id, 10);
+        if (gamesResult.success) {
+          recentGames = gamesResult.games.map(game => ({
             id: game.id,
             timestamp: game.timestamp,
-            win: game.players.find(p => p.name === activeUser.username)?.isWinner || 
-                 (game.winner === 'draw' ? null : false),
-            score: game.players.find(p => p.name === activeUser.username)?.isWinner ? 1 : 
-                   (game.winner === 'draw' ? 0 : -1),
-            aiLevel: 'network',
-            opponent: game.players.find(p => p.name !== activeUser.username)?.name || 'Сетевой игрок',
-            type: 'network',
-            leaveReason: game.leaveReason
+            win: game.win,
+            score: game.score || 0,
+            aiLevel: game.aiLevel || 'medium',
+            opponent: game.opponent || 'ИИ',
+            type: game.isNetworkGame ? 'network' : 'ai'
           }));
-        
-        // Объединяем все игры и сортируем по дате
-        recentGames = [...aiGames, ...networkGames]
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-          .slice(0, 10); // Последние 10 игр
-          
-      } catch (storageError) {
-        console.log('Не удалось загрузить статистику из localStorage:', storageError);
+        }
+      } catch (gamesError) {
+        console.log('Не удалось загрузить игры из Firebase:', gamesError);
       }
 
       setProfileData({
@@ -139,56 +115,80 @@ function Profile() {
     loadProfileData();
   }, [loadProfileData]);
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     try {
-      const updatedUser = {
-        ...activeUser,
+      const updatedData = {
         firstName: editForm.firstName,
         lastName: editForm.lastName,
-        fullName: `${editForm.firstName} ${editForm.lastName}`,
+        fullName: `${editForm.firstName} ${editForm.lastName}`.trim(),
         email: editForm.email
       };
 
-      // Обновляем в контексте
-      updateUser(updatedUser);
+      // Обновляем в Firebase
+      const result = await updateUserProfile(activeUser.id, updatedData);
+      
+      if (result.success) {
+        // Обновляем в контексте
+        const updatedUser = {
+          ...activeUser,
+          ...updatedData
+        };
+        
+        updateUser(activeUser.id, updatedData);
 
-      // Обновляем локальные данные
-      setProfileData(prev => ({
-        ...prev,
-        firstName: editForm.firstName,
-        lastName: editForm.lastName,
-        email: editForm.email
-      }));
+        // Обновляем локальные данные
+        setProfileData(prev => ({
+          ...prev,
+          ...updatedData
+        }));
 
-      setIsEditing(false);
-      alert('Данные профиля успешно обновлены!');
+        setIsEditing(false);
+        alert('Данные профиля успешно обновлены!');
+      } else {
+        alert(`Не удалось обновить профиль: ${result.message}`);
+      }
     } catch (err) {
       console.error('Ошибка сохранения профиля:', err);
       alert('Не удалось сохранить изменения');
     }
   };
 
-  const handleAvatarUpload = (event) => {
+  const handleAvatarUpload = async (event) => {
     const file = event.target.files[0];
     if (file) {
+      // Проверяем размер файла (максимум 2MB)
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Файл слишком большой. Максимальный размер: 2MB');
+        return;
+      }
+
+      // Проверяем тип файла
+      if (!file.type.startsWith('image/')) {
+        alert('Пожалуйста, выберите файл изображения');
+        return;
+      }
+
       const reader = new FileReader();
-      reader.onload = (e) => {
-        const imageData = e.target.result;
-        
-        // Обновляем аватар
-        const updatedUser = {
-          ...activeUser,
-          avatar: imageData
-        };
-        
-        updateUser(updatedUser);
-        setProfileData(prev => ({ ...prev, avatar: imageData }));
-        
-        // Сохраняем в localStorage через Storage
+      reader.onload = async (e) => {
         try {
-          Storage.saveUserAvatar(activeUser.username, imageData);
+          const imageData = e.target.result;
+          
+          // Обновляем аватар в Firebase
+          const result = await updateUserAvatar(activeUser.id, imageData);
+          
+          if (result.success) {
+            // Обновляем в контексте
+            changeAvatar(activeUser.id, imageData);
+            
+            // Обновляем локальные данные
+            setProfileData(prev => ({ ...prev, avatar: imageData }));
+            alert('Аватар успешно обновлен!');
+          } else {
+            alert(`Не удалось обновить аватар: ${result.message}`);
+          }
         } catch (err) {
-          console.log('Не удалось сохранить аватар:', err);
+          console.error('Ошибка загрузки аватара:', err);
+          alert('Ошибка при загрузке аватара');
         }
       };
       reader.readAsDataURL(file);
@@ -198,7 +198,7 @@ function Profile() {
   const formatDate = (dateString) => {
     if (!dateString) return 'Неизвестно';
     try {
-      const date = new Date(dateString);
+      const date = typeof dateString === 'string' ? new Date(dateString) : dateString.toDate();
       return date.toLocaleDateString('ru-RU', {
         day: '2-digit',
         month: '2-digit',
@@ -225,6 +225,18 @@ function Profile() {
       case 'network': return 'Сетевой';
       default: return aiLevel;
     }
+  };
+
+  const getResultText = (win) => {
+    if (win === true) return 'Победа';
+    if (win === false) return 'Поражение';
+    return 'Ничья';
+  };
+
+  const getResultClass = (win) => {
+    if (win === true) return 'win';
+    if (win === false) return 'loss';
+    return 'draw';
   };
 
   if (!activeUser) {
@@ -369,18 +381,26 @@ function Profile() {
                         {activeUser.isAdmin ? '👑 Администратор' : '🎮 Игрок'}
                       </span>
                     </div>
-                    <button 
-                      className="edit-profile-btn"
-                      onClick={() => setIsEditing(true)}
-                    >
-                      ✏️ Редактировать профиль
-                    </button>
-                    <button 
-                      className="change-password-btn"
-                      onClick={() => navigate('/change-password')}
-                    >
-                      🔒 Сменить пароль
-                    </button>
+                    <div className="profile-actions">
+                      <button 
+                        className="edit-profile-btn"
+                        onClick={() => setIsEditing(true)}
+                      >
+                        ✏️ Редактировать профиль
+                      </button>
+                      <button 
+                        className="change-password-btn"
+                        onClick={() => navigate('/change-password')}
+                      >
+                        🔒 Сменить пароль
+                      </button>
+                      <button 
+                        className="logout-btn"
+                        onClick={() => navigate('/game')}
+                      >
+                        🎮 Играть
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -426,7 +446,7 @@ function Profile() {
               <div className="stat-card">
                 <div className="stat-icon">📈</div>
                 <div className="stat-content">
-                  <div className="stat-value">{calculateWinRate()}%</div>
+                  <div className="stat-value">{profileData.stats.winRate || calculateWinRate()}%</div>
                   <div className="stat-label">Процент побед</div>
                 </div>
               </div>
@@ -470,22 +490,17 @@ function Profile() {
                     {profileData.recentGames.map((game, index) => (
                       <tr key={game.id || index}>
                         <td>{formatDate(game.timestamp)}</td>
-                        <td className={`result-cell ${game.win ? 'win' : game.win === false ? 'loss' : 'draw'}`}>
-                          {game.win ? 'Победа' : game.win === false ? 'Поражение' : 'Ничья'}
-                          {game.leaveReason && (
-                            <div className="leave-reason" style={{ fontSize: '0.8rem', color: '#dc3545' }}>
-                              ({game.leaveReason})
-                            </div>
-                          )}
+                        <td className={`result-cell ${getResultClass(game.win)}`}>
+                          {getResultText(game.win)}
                         </td>
                         <td>
                           {getDifficultyText(game.aiLevel)}
+                          {game.type === 'network' && ' 🌐'}
                         </td>
                         <td className="opponent-cell">
                           {game.opponent}
-                          {game.type === 'network' && ' 🌐'}
                         </td>
-                        <td className={game.score > 0 ? 'positive' : game.score < 0 ? 'negative' : 'neutral'}>
+                        <td className={`score-cell ${game.score > 0 ? 'positive' : game.score < 0 ? 'negative' : 'neutral'}`}>
                           {game.score > 0 ? '+' : ''}{game.score}
                         </td>
                       </tr>

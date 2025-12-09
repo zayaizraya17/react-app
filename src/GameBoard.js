@@ -1,10 +1,11 @@
-// GameBoard.js - обновленная версия с сетевым режимом
+
+// GameBoard.js - обновленная версия с Firebase
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AI, getGameResult } from './gameLogic';
-import { Storage } from './storage';
 import { useAuth } from './AuthContext';
 import { NetworkGameManager } from './NetworkGameManager';
 import GameModeSelector from './GameModeSelector';
+import { saveGameResult } from './firebase'; 
 
 const GameBoard = () => {
   const { currentUser } = useAuth();
@@ -32,13 +33,15 @@ const GameBoard = () => {
     aiLevelRef.current = aiLevel;
   }, [aiLevel]);
 
+  // Загрузка статистики из Firebase (если нужно)
   useEffect(() => {
     if (currentUser) {
-      const stats = Storage.getUserStats(currentUser.username);
+      // Пока используем локальное состояние
+      // Позже можно загружать из Firebase
       setScore({
-        player: stats.wins,
-        ai: stats.losses,
-        draws: stats.draws
+        player: 0,
+        ai: 0,
+        draws: 0
       });
     }
   }, [currentUser]);
@@ -126,18 +129,26 @@ const GameBoard = () => {
         setWinner(updatedRoom.winner);
         setGameOver(true);
         
-        // Сохраняем результат игры
+        // Сохраняем результат игры в Firebase
         if (currentUser) {
           const playerSymbol = currentPlayer.symbol;
           const win = updatedRoom.winner === playerSymbol;
           const draw = updatedRoom.winner === 'draw';
+          const scoreValue = win ? 1 : (draw ? 0 : -1);
           
-          Storage.saveGameResult(currentUser.username, {
-            win: win ? true : (draw ? null : false),
-            score: win ? 1 : (draw ? 0 : -1),
-            aiLevel: 'network',
-            squares: updatedRoom.squares,
-            opponent: networkRoom.players.find(p => p.name !== currentUser.username)?.name || 'Сетевой игрок'
+          // Сохраняем в Firebase
+          saveGameResult(
+            currentUser.id,
+            currentUser.username,
+            win,
+            scoreValue,
+            'network'
+          ).then(result => {
+            if (result.success) {
+              console.log('Игра сохранена в Firebase');
+            } else {
+              console.error('Ошибка сохранения игры:', result.message);
+            }
           });
         }
       }
@@ -153,15 +164,18 @@ const GameBoard = () => {
       if (networkRoom.status === 'playing') {
         const opponent = networkRoom.players.find(p => p.id !== currentPlayer.id);
         if (opponent) {
-          // Сохраняем поражение для текущего игрока
+          // Сохраняем поражение для текущего игрока в Firebase
           if (currentUser) {
-            Storage.saveGameResult(currentUser.username, {
-              win: false,
-              score: -1,
-              aiLevel: 'network',
-              squares: networkRoom.squares,
-              opponent: opponent.name,
-              leaveReason: 'Вы покинули игру'
+            saveGameResult(
+              currentUser.id,
+              currentUser.username,
+              false,
+              -1,
+              'network'
+            ).then(result => {
+              if (result.success) {
+                console.log('Результат покидания игры сохранен в Firebase');
+              }
             });
           }
         }
@@ -183,7 +197,7 @@ const GameBoard = () => {
   }, [networkRoom, currentPlayer, networkPolling, currentUser]);
 
   // Функции для игры с ИИ
-  const checkAndSaveGameResult = useCallback((currentSquares) => {
+  const checkAndSaveGameResult = useCallback(async (currentSquares) => {
     const result = getGameResult(currentSquares, 'X');
     
     if (result.result === 'draw' || result.result === 'win' || result.result === 'loss') {
@@ -198,14 +212,20 @@ const GameBoard = () => {
         draws: result.result === 'draw' ? prev.draws + 1 : prev.draws
       }));
       
+      // Сохраняем результат игры в Firebase
       if (currentUser) {
-        Storage.saveGameResult(currentUser.username, {
-          win: result.win,
-          score: result.score,
-          aiLevel: aiLevelRef.current,
-          squares: currentSquares,
-          opponent: 'ИИ'
-        });
+        try {
+          await saveGameResult(
+            currentUser.id,
+            currentUser.username,
+            result.win,
+            result.score,
+            aiLevelRef.current
+          );
+          console.log('Игра сохранена в Firebase');
+        } catch (error) {
+          console.error('Ошибка сохранения игры в Firebase:', error);
+        }
       }
       
       return true;

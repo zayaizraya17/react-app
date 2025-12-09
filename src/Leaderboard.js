@@ -47,36 +47,37 @@ const Leaderboard = () => {
   };
 
   const formatDate = (timestamp) => {
-    if (!timestamp) return 'Никогда';
+  if (!timestamp) return 'Никогда';
+  
+  try {
+    // Если timestamp - это Firebase Timestamp
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     
-    try {
-      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-      const now = new Date();
-      const diffMs = now - date;
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-      
-      if (diffDays === 0) {
-        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-        if (diffHours < 1) {
-          const diffMinutes = Math.floor(diffMs / (1000 * 60));
-          return `${diffMinutes} мин. назад`;
-        }
-        return `${diffHours} ч. назад`;
+    if (diffDays === 0) {
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      if (diffHours < 1) {
+        const diffMinutes = Math.floor(diffMs / (1000 * 60));
+        return `${diffMinutes} мин. назад`;
       }
-      
-      if (diffDays === 1) return 'Вчера';
-      if (diffDays < 7) return `${diffDays} дн. назад`;
-      
-      return date.toLocaleDateString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-      });
-    } catch (error) {
-      console.error('Ошибка форматирования даты:', timestamp, error);
-      return 'Неизвестно';
+      return `${diffHours} ч. назад`;
     }
-  };
+    
+    if (diffDays === 1) return 'Вчера';
+    if (diffDays < 7) return `${diffDays} дн. назад`;
+    
+    return date.toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+  } catch (error) {
+    console.error('Ошибка форматирования даты:', error);
+    return 'Неизвестно';
+  }
+};
 
   const getRankColor = (rank) => {
     switch(rank) {

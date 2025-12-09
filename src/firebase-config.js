@@ -1,9 +1,13 @@
-// Конфигурация Firebase (замените на свои данные из Firebase Console)
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
 export const firebaseConfig = {
-  apiKey: "AIzaSyC2o0-bA9-vLgB1JYbGjCb8KtLk4Z1n8WQ",
+  apiKey: "AIzaSyD_Xocs0voQhgveekECWGq-hZ6TfedfIpg",
   authDomain: "task1-6ac0b.firebaseapp.com",
   projectId: "task1-6ac0b",
-  storageBucket: "task1-6ac0b.appspot.com",
-  messagingSenderId: "123456789012",
-  appId: "1:123456789012:web:abcdef1234567890"
+  storageBucket: "task1-6ac0b.firebasestorage.app",
+  messagingSenderId: "157651581979",
+  appId: "1:157651581979:web:9d47ccd2f850bf84bf4cbe",
+  measurementId: "G-654GKQ3KJB"
 };
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);

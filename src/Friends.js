@@ -1,7 +1,7 @@
 // Friends.js - исправленная версия
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
-import { Auth } from './auth'; // Для поиска пользователей
+import { Auth } from './firebase'; // Для поиска пользователей
 import { Storage } from './storage'; // Для управления друзьями и запросами
 import { useNavigate } from 'react-router-dom';
 
